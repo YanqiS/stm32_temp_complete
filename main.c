@@ -227,6 +227,12 @@ uint8_t DEBUG_LIN_Send_Count = 0;     // LIN发送计数
 uint8_t DEBUG_DataProcess = 0;        // DataProcess状态
 uint8_t DEBUG_CAN_104_Count = 0;      // 收到0x104的计数
 uint16_t DEBUG_RID22_Count = 0;       // 识别到RID 0x22的累计次数
+uint16_t DEBUG_RID34_Count = 0;       // 识别到RID 0x34的累计次数
+uint16_t EBSBatVol_raw = 16383;           // 14bit raw, 16383 means invalid per LDF
+uint8_t EBSVolSts_raw = 3;                // 2bit status, default invalid
+uint8_t EBSBatCrntRng_raw = 3;            // 2bit status, default invalid
+uint8_t EBSBatIncnstncyFlag_raw = 0;      // 1bit, 0=no error
+uint8_t EBSRespEr_raw = 0;                // 1bit, response error
 
 //////// ////////app level
 
@@ -398,6 +404,7 @@ void LIN_RESET(UART_HandleTypeDef *huart);
 uint8_t Lin_CheckPID(uint8_t id);
 uint8_t Lin_Checksum(uint8_t id, uint8_t data[]);
 uint8_t Calc_SWS_G3_CRC8(const uint8_t *data, uint8_t len);
+void Build_EBS_0x34_Data(void);
 void Lin_SendData(uint8_t *data);
 void Lin_DataProcess_loop(void);
 
@@ -3226,6 +3233,15 @@ void HAL_FDCAN_RxFifo0Callback(FDCAN_HandleTypeDef *hfdcan, uint32_t RxFifo0ITs)
 					TSA_Ack_DATA[5] = 1;
 					TSA4_0x104_Flag = 1;
 					lvLED_Sts_LIN = 2;
+				} else if (FDCAN1_RxHeader.Identifier == 0x105)	//EBS LIN FrP00 bridge
+						{
+					EBSBatVol_raw = (uint16_t) (((uint16_t) buf_rec[1] << 8) | buf_rec[0]) & 0x3FFF;
+					EBSVolSts_raw = buf_rec[2] & 0x03;
+					EBSBatCrntRng_raw = buf_rec[3] & 0x03;
+					EBSBatIncnstncyFlag_raw = buf_rec[4] & 0x01;
+					EBSRespEr_raw = buf_rec[5] & 0x01;
+					TSA_Ack_DATA[6] = 1;
+					lvLED_Sts_LIN = 2;
 				} else if (FDCAN1_RxHeader.Identifier == 0x064)	//TSA_RC1 mm
 						{
 					TA531_RC1.TA531_RC_X_trg = (int) ((buf_rec[1] << 8)
@@ -3699,6 +3715,18 @@ uint8_t Calc_SWS_G3_CRC8(const uint8_t *data, uint8_t len) {
 	return crc;
 }
 
+void Build_EBS_0x34_Data(void) {
+	uint16_t v = EBSBatVol_raw & 0x3FFF;
+
+	memset(EBS_0x0_Data, 0, 9);
+
+	EBS_0x0_Data[0] = (uint8_t) (v & 0xFF);
+	EBS_0x0_Data[1] = (uint8_t) (((v >> 8) & 0x3F) | ((EBSBatCrntRng_raw & 0x03) << 6));
+	EBS_0x0_Data[6] = (uint8_t) (((EBSVolSts_raw & 0x03) << 2)
+			| ((EBSRespEr_raw & 0x01) << 6)
+			| ((EBSBatIncnstncyFlag_raw & 0x01) << 7));
+}
+
 void Lin_SendData(uint8_t *data) {
 	Lin_Checksum(ReceiveID, data);
 
@@ -3753,6 +3781,7 @@ void Lin_DataProcess_loop(void)	//asap, if need to deal with LIN data; if not ,s
 			+ ((TA531_LIN_SWS_G3.RespErSWSF_l & 0x01) << 6);
 
 	SWS_0x22_Data[0] = Calc_SWS_G3_CRC8(&SWS_0x22_Data[1], 7);
+
 
 	//// ========== 处理接收到的LIN数据 ==========
 	uint8_t PIDChecksum;
@@ -3818,11 +3847,21 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 			DEBUG_RID22_Count++;
 		}
 
-		if (ReceiveID == 0x22)  // ← 改成0x22
+		if (ReceiveID == 0x22)  // SWS response
 				{
 			DEBUG_LIN_Send_Count++;
 			Lin_SendData(SWS_0x22_Data);
 			SWS_0x22_Flag = 0;
+			DataProcess = 0;
+
+			LIN_RESET(&huart1);
+			HAL_UART_Receive_IT(&huart1, u1RxData, LIN_Data_LENGTH);
+			return;
+		} else if (ReceiveID == 0x34) { // EBS_ICCLIN1_FrP00_ICC_LIN1
+			DEBUG_RID34_Count++;
+			DEBUG_LIN_Send_Count++;
+			Build_EBS_0x34_Data();
+			Lin_SendData(EBS_0x0_Data);
 			DataProcess = 0;
 
 			LIN_RESET(&huart1);
