@@ -3782,7 +3782,6 @@ void Lin_DataProcess_loop(void)	//asap, if need to deal with LIN data; if not ,s
 
 	SWS_0x22_Data[0] = Calc_SWS_G3_CRC8(&SWS_0x22_Data[1], 7);
 
-	Build_EBS_0x34_Data();
 
 	//// ========== 处理接收到的LIN数据 ==========
 	uint8_t PIDChecksum;
@@ -3861,6 +3860,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 		} else if (ReceiveID == 0x34) { // EBS_ICCLIN1_FrP00_ICC_LIN1
 			DEBUG_RID34_Count++;
 			DEBUG_LIN_Send_Count++;
+			Build_EBS_0x34_Data();
 			Lin_SendData(EBS_0x0_Data);
 			DataProcess = 0;
 
